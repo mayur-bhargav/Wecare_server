@@ -3,6 +3,7 @@ const { body, validationResult } = require('express-validator');
 const Review = require('../models/Review');
 const Booking = require('../models/Booking');
 const User = require('../models/User');
+const DaycareProvider = require('../models/DaycareProvider');
 
 const router = express.Router();
 
@@ -253,6 +254,50 @@ router.get('/parent/:parentId/reviewed-nannies', async (req, res) => {
       success: false,
       message: 'Failed to get reviewed nannies',
     });
+  }
+});
+
+// ======================== DAYCARE REVIEWS ========================
+
+/**
+ * @route   GET /api/reviews/daycare/:daycareId
+ * @desc    Get all reviews for a daycare provider
+ */
+router.get('/daycare/:daycareId', async (req, res) => {
+  try {
+    const { daycareId } = req.params;
+    const reviews = await Review.find({ daycareId })
+      .populate('parentId', 'name profileImage')
+      .sort({ createdAt: -1 });
+
+    const formattedReviews = reviews.map(r => ({
+      _id: r._id,
+      rating: r.rating,
+      comment: r.comment,
+      createdAt: r.createdAt,
+      parent: r.parentId ? { name: r.parentId.name, profileImage: r.parentId.profileImage } : null,
+    }));
+
+    // Stats
+    const totalReviews = reviews.length;
+    const avgRating = totalReviews > 0 ? reviews.reduce((s, r) => s + r.rating, 0) / totalReviews : 0;
+    const distribution = { 5: 0, 4: 0, 3: 0, 2: 0, 1: 0 };
+    reviews.forEach(r => { distribution[r.rating] = (distribution[r.rating] || 0) + 1; });
+
+    res.json({
+      success: true,
+      data: {
+        reviews: formattedReviews,
+        stats: {
+          averageRating: Math.round(avgRating * 10) / 10,
+          totalReviews,
+          ratingDistribution: distribution,
+        },
+      },
+    });
+  } catch (error) {
+    console.error('Get daycare reviews error:', error);
+    res.status(500).json({ success: false, message: 'Failed to fetch reviews' });
   }
 });
 

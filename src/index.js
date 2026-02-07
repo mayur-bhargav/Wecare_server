@@ -1,7 +1,12 @@
 require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
+const http = require('http');
+const { Server } = require('socket.io');
 const connectDB = require('./config/database');
+const NotificationService = require('./services/notificationService');
+const User = require('./models/User');
+const DaycareProvider = require('./models/DaycareProvider');
 const authRoutes = require('./routes/auth');
 const bookingRoutes = require('./routes/bookings');
 const userRoutes = require('./routes/users');
@@ -11,15 +16,25 @@ const cityRoutes = require('./routes/cities');
 const providerRoutes = require('./routes/providers');
 const notificationRoutes = require('./routes/notifications');
 const adminRoutes = require('./routes/admin');
+const messageRoutes = require('./routes/messages');
+const photoRoutes = require('./routes/photos');
 
 const app = express();
+const server = http.createServer(app);
+const io = new Server(server, {
+  cors: {
+    origin: '*',
+    methods: ['GET', 'POST'],
+  },
+});
 
 // Connect to MongoDB
 connectDB();
 
 // Middleware
 app.use(cors());
-app.use(express.json());
+app.use(express.json({ limit: '50mb' }));
+app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
 // Routes
 app.use('/api/auth', authRoutes);
@@ -31,6 +46,93 @@ app.use('/api/cities', cityRoutes);
 app.use('/api/providers', providerRoutes);
 app.use('/api/notifications', notificationRoutes);
 app.use('/api/admin', adminRoutes);
+app.use('/api/messages', messageRoutes);
+app.use('/api/photos', photoRoutes);
+
+// ── WebRTC signaling (Socket.IO) ──
+io.on('connection', (socket) => {
+  console.log('[Server] New socket connected:', socket.id);
+
+  socket.on('call:join', ({ conversationId, userId }) => {
+    console.log('[Server] call:join — socket:', socket.id, 'conversationId:', conversationId, 'userId:', userId);
+    if (conversationId) {
+      socket.join(conversationId);
+    }
+    if (userId) {
+      socket.join(`user:${userId}`);
+    }
+  });
+
+  socket.on('call:offer', async (payload) => {
+    console.log('[Server] call:offer — from:', payload?.fromUserId, 'to:', payload?.toUserId, 'conversationId:', payload?.conversationId, 'hasSdp:', !!payload?.sdp);
+    if (!payload?.conversationId) return;
+    socket.to(payload.conversationId).emit('call:offer', payload);
+    if (payload?.toUserId) {
+      socket.to(`user:${payload.toUserId}`).emit('call:offer', payload);
+    }
+
+    try {
+      if (!payload?.toUserId || !payload?.toRole) return;
+      const data = {
+        type: 'call_invite',
+        conversationId: String(payload.conversationId),
+        fromUserId: String(payload.fromUserId || ''),
+        fromName: String(payload.fromName || ''),
+        toUserId: String(payload.toUserId || ''),
+        toRole: String(payload.toRole || ''),
+      };
+
+      if (payload.toRole === 'parent') {
+        const title = '📞 Incoming Call';
+        const body = `${payload.fromName || 'Someone'} is calling you`;
+        await NotificationService.sendToUser(payload.toUserId, { title, body, data });
+      } else if (payload.toRole === 'daycare') {
+        const daycare = await DaycareProvider.findById(payload.toUserId);
+        if (daycare?.fcmToken) {
+          await NotificationService.sendDataToToken(daycare.fcmToken, data);
+        }
+      }
+    } catch (error) {
+      console.error('Call invite push error:', error);
+    }
+  });
+
+  socket.on('call:answer', (payload) => {
+    console.log('[Server] call:answer — from:', payload?.fromUserId, 'to:', payload?.toUserId, 'conversationId:', payload?.conversationId);
+    if (!payload?.conversationId) return;
+    socket.to(payload.conversationId).emit('call:answer', payload);
+    if (payload?.toUserId) {
+      socket.to(`user:${payload.toUserId}`).emit('call:answer', payload);
+    }
+  });
+
+  socket.on('call:ice', (payload) => {
+    if (!payload?.conversationId) return;
+    socket.to(payload.conversationId).emit('call:ice', payload);
+    if (payload?.toUserId) {
+      socket.to(`user:${payload.toUserId}`).emit('call:ice', payload);
+    }
+  });
+
+  socket.on('call:end', (payload) => {
+    if (!payload?.conversationId) return;
+    socket.to(payload.conversationId).emit('call:end', payload);
+    if (payload?.toUserId) {
+      socket.to(`user:${payload.toUserId}`).emit('call:end', payload);
+    }
+  });
+
+  // When callee accepted from notification (no SDP), they signal readiness
+  // so the caller can re-send the offer
+  socket.on('call:ready', (payload) => {
+    console.log('[Server] call:ready — from:', payload?.fromUserId, 'to:', payload?.toUserId, 'conversationId:', payload?.conversationId);
+    if (!payload?.conversationId) return;
+    socket.to(payload.conversationId).emit('call:ready', payload);
+    if (payload?.toUserId) {
+      socket.to(`user:${payload.toUserId}`).emit('call:ready', payload);
+    }
+  });
+});
 
 // Health check endpoint
 app.get('/health', (req, res) => {
@@ -426,7 +528,7 @@ app.use((req, res) => {
 
 const PORT = process.env.PORT || 5000;
 
-app.listen(PORT, () => {
+server.listen(PORT, () => {
   console.log(`🚀 WeCare Server running on port ${PORT}`);
   console.log(`📱 Environment: ${process.env.NODE_ENV}`);
 });

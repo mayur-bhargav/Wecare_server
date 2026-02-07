@@ -114,6 +114,8 @@ const daycareProviderSchema = new mongoose.Schema({
   photos: [{
     url: String,
     caption: String,
+    publicId: String,
+    uploadedAt: { type: Date, default: Date.now },
   }],
 
   // Documents

@@ -17,7 +17,11 @@ const reviewSchema = new mongoose.Schema({
   nannyId: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'User',
-    required: true,
+  },
+  // Daycare being reviewed
+  daycareId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'DaycareProvider',
   },
   // Rating (1-5)
   rating: {
@@ -47,6 +51,8 @@ const reviewSchema = new mongoose.Schema({
 reviewSchema.index({ bookingId: 1 }, { unique: true });
 // For fetching all reviews for a nanny
 reviewSchema.index({ nannyId: 1, createdAt: -1 });
+// For fetching all reviews for a daycare
+reviewSchema.index({ daycareId: 1, createdAt: -1 });
 // For fetching all reviews by a parent
 reviewSchema.index({ parentId: 1, createdAt: -1 });
 

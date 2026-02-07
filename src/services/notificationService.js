@@ -46,10 +46,10 @@ class NotificationService {
 
       const message = {
         token: token,
-        notification: {
+        notification: notification.title || notification.body ? {
           title: notification.title,
           body: notification.body,
-        },
+        } : undefined,
         data: notification.data || {},
         android: {
           priority: 'high',
@@ -80,6 +80,67 @@ class NotificationService {
         // Token is invalid, could clean up the database
         console.log('Token is invalid/expired');
       }
+      return { success: false, error: error.message };
+    }
+  }
+
+  /**
+   * Send data-only notification to a specific FCM token (for background handlers)
+   * @param {string} token - FCM token
+   * @param {object} data - key/value string data
+   */
+  static async sendDataToToken(token, data) {
+    try {
+      if (!admin || !admin.messaging) {
+        console.error('❌ Firebase not initialized');
+        return { success: false, error: 'Firebase not initialized' };
+      }
+
+      const message = {
+        token,
+        data: data || {},
+        android: {
+          priority: 'high',
+        },
+        apns: {
+          payload: {
+            aps: {
+              'content-available': 1,
+            },
+          },
+        },
+      };
+
+      const response = await admin.messaging().send(message);
+      console.log('✅ Data notification sent successfully:', response);
+      return { success: true, messageId: response };
+    } catch (error) {
+      console.error('❌ Error sending data notification:', error);
+      return { success: false, error: error.message };
+    }
+  }
+
+  /**
+   * Send data-only notification to a single user
+   * @param {string} userId - User ID to send notification to
+   * @param {object} data - key/value string data
+   */
+  static async sendDataToUser(userId, data) {
+    try {
+      const user = await User.findById(userId);
+      if (!user || !user.fcmToken) {
+        console.log(`⚠️ No FCM token for user ${userId}`);
+        return { success: false, reason: 'No FCM token' };
+      }
+
+      if (user.privacySettings && user.privacySettings.pushNotifications === false) {
+        console.log(`⚠️ Push notifications disabled for user ${userId}`);
+        return { success: false, reason: 'Notifications disabled' };
+      }
+
+      return await this.sendDataToToken(user.fcmToken, data);
+    } catch (error) {
+      console.error('Error sending data notification to user:', error);
       return { success: false, error: error.message };
     }
   }

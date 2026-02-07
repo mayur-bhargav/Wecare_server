@@ -523,4 +523,108 @@ router.get('/eldercare/pending/list', async (req, res) => {
   }
 });
 
+// ======================== DAYCARE EARNINGS ========================
+
+/**
+ * GET /api/providers/daycare/:daycareId/earnings
+ * Get earnings summary for a daycare provider
+ */
+router.get('/daycare/:daycareId/earnings', async (req, res) => {
+  try {
+    const { daycareId } = req.params;
+    const { period = 'all' } = req.query;
+
+    const provider = await DaycareProvider.findById(daycareId);
+    if (!provider) {
+      return res.status(404).json({ success: false, message: 'Provider not found' });
+    }
+
+    // Since there's no DaycareBooking model, earnings come from the provider profile
+    const totalEarnings = provider.totalEarnings || 0;
+    const availableBalance = provider.availableBalance || 0;
+
+    // Fetch transactions for this provider (if stored via userId pattern)
+    const Transaction = require('../models/Transaction');
+    const transactions = await Transaction.find({ userId: daycareId })
+      .sort({ createdAt: -1 })
+      .limit(50);
+
+    // Calculate period-based earnings from transactions
+    const now = new Date();
+    let periodStart = null;
+
+    if (period === 'today') {
+      periodStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    } else if (period === 'week') {
+      periodStart = new Date(now);
+      periodStart.setDate(now.getDate() - 7);
+    } else if (period === 'month') {
+      periodStart = new Date(now.getFullYear(), now.getMonth(), 1);
+    }
+
+    const earningTransactions = transactions.filter(t => t.type === 'earning' && t.status === 'completed');
+    const withdrawalTransactions = transactions.filter(t => t.type === 'withdrawal');
+
+    // Period earnings
+    let periodEarnings = 0;
+    if (periodStart) {
+      earningTransactions.forEach(t => {
+        if (new Date(t.createdAt) >= periodStart) {
+          periodEarnings += t.amount || 0;
+        }
+      });
+    } else {
+      periodEarnings = totalEarnings;
+    }
+
+    // Today/week/month summaries
+    const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const startOfWeek = new Date(now);
+    startOfWeek.setDate(now.getDate() - 7);
+    const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
+
+    const todayEarnings = earningTransactions
+      .filter(t => new Date(t.createdAt) >= startOfToday)
+      .reduce((sum, t) => sum + (t.amount || 0), 0);
+
+    const weekEarnings = earningTransactions
+      .filter(t => new Date(t.createdAt) >= startOfWeek)
+      .reduce((sum, t) => sum + (t.amount || 0), 0);
+
+    const monthEarnings = earningTransactions
+      .filter(t => new Date(t.createdAt) >= startOfMonth)
+      .reduce((sum, t) => sum + (t.amount || 0), 0);
+
+    const withdrawnAmount = withdrawalTransactions
+      .filter(t => t.status === 'completed')
+      .reduce((sum, t) => sum + (t.amount || 0), 0);
+
+    res.json({
+      success: true,
+      data: {
+        summary: {
+          totalEarnings,
+          availableBalance,
+          withdrawnAmount,
+          todayEarnings,
+          weekEarnings,
+          monthEarnings,
+          periodEarnings,
+        },
+        transactionHistory: transactions.map(t => ({
+          id: t._id,
+          type: t.type,
+          amount: t.amount,
+          status: t.status,
+          description: t.description,
+          date: t.createdAt,
+        })),
+      },
+    });
+  } catch (error) {
+    console.error('Daycare earnings error:', error);
+    res.status(500).json({ success: false, message: 'Server error' });
+  }
+});
+
 module.exports = router;
